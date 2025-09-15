@@ -1,4 +1,6 @@
 import uuid
+import logging
+from logging.handlers import RotatingFileHandler, SysLogHandler
 from datetime import datetime, timezone
 from typing import Optional, Dict
 
@@ -10,6 +12,27 @@ from app.schemas.event import EventRecord
 from app.crud.events import append_event
 
 APP_NAME = "vast-tracker"
+
+
+logger = logging.getLogger(APP_NAME)
+logger.setLevel(logging.INFO)
+
+file_handler = RotatingFileHandler("vast-reporting.log", maxBytes=1_000_000, backupCount=5)
+file_handler.setLevel(logging.ERROR)
+
+try:
+    from systemd.journal import JournalHandler
+
+    journal_handler = JournalHandler(SYSLOG_IDENTIFIER=APP_NAME)
+except Exception:  # pragma: no cover - fallback when systemd is unavailable
+    journal_handler = SysLogHandler(address="/dev/log")
+journal_handler.setLevel(logging.ERROR)
+
+formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+for handler in (file_handler, journal_handler):
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
 
 app = FastAPI(title=APP_NAME)
 
@@ -63,4 +86,5 @@ async def track(request: Request, r: Optional[str] = None, ev: Optional[str] = N
         append_event(record)
         return Response(status_code=204)
     except Exception:
+        logger.exception("error processing tracking request")
         return Response(status_code=204)

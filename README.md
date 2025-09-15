@@ -27,6 +27,16 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 Visit `http://localhost:8000/healthz` for a health check.
 
+## Tracking URL example
+
+Use `http://vast.podhub.in/track` as the base URL when constructing tracking pixels. For example:
+
+```
+http://vast.podhub.in/track?advertiser=shopify&client=574d66fb-1a31-43ec-bd16-a28cd84d396c&clname=undrthecoshukshopifyuk_gb_shopify_218545&dt=%%delivery_time%%&eid=%%episodeid%%&event_type=imp&ip=%%ip%%&ord=%%cachebuster%%&pid=%%podcastid%%&plt=megaphone&pub=voiceworkssportslimited&ua=%%ua%%&v=1
+```
+
+This mirrors the format used by similar services but targets the VAST reporting endpoint.
+
 ## Systemd service example
 
 A sample unit file is provided as `vast.service`.
