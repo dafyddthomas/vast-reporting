@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+azure-storage-blob
+python-dotenv
+pytest
+httpx
+ruff
