@@ -4,6 +4,8 @@ import sys
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
+from azure.core.exceptions import ResourceNotFoundError
+
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from app.crud import events
@@ -59,6 +61,7 @@ def test_flush_events_batches_payload(monkeypatch):
         + "\n"
     ).encode("utf-8")
     mock_blob_client.append_block.assert_called_once_with(expected_first + expected_second)
+    mock_blob_client.create_append_blob.assert_not_called()
 
     events.flush_events()
 
@@ -90,6 +93,38 @@ def test_flush_events_requeues_on_failure(monkeypatch):
         + "\n"
     ).encode("utf-8")
     mock_blob_client.append_block.assert_called_once_with(expected_data)
+
+    events.flush_events()
+
+
+def test_flush_events_creates_blob_when_missing(monkeypatch):
+    events.flush_events()
+    monkeypatch.setattr(events, "_blob_path", lambda _: "events/2025/09/16/12.jsonl")
+
+    missing_event = _sample_event(request_id="req-3")
+
+    mock_blob_client = MagicMock()
+    mock_blob_client.append_block.side_effect = [
+        ResourceNotFoundError("missing"),
+        None,
+    ]
+
+    mock_container = MagicMock()
+    mock_container.get_blob_client.return_value = mock_blob_client
+    monkeypatch.setattr(events, "_container_client", lambda: mock_container)
+
+    events.append_event(missing_event)
+    events.flush_events()
+
+    mock_container.get_blob_client.assert_called_once_with("events/2025/09/16/12.jsonl")
+    expected_payload = (
+        json.dumps(missing_event.__dict__, separators=(",", ":"), ensure_ascii=False)
+        + "\n"
+    ).encode("utf-8")
+
+    assert mock_blob_client.append_block.call_count == 2
+    assert mock_blob_client.append_block.call_args_list[1][0][0] == expected_payload
+    mock_blob_client.create_append_blob.assert_called_once()
 
     events.flush_events()
 

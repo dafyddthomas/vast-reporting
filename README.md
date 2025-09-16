@@ -1,6 +1,6 @@
 # vast-reporting
 
-A minimal FastAPI service that accepts VAST tracking requests and logs them to Azure Blob Storage. Events are appended to an hourly JSONL blob stored in a date-based folder (`events/YYYY/MM/DD/HH.jsonl`).
+A minimal FastAPI service that accepts VAST tracking requests and logs them to Azure Blob Storage. Events are appended to an hourly JSONL blob stored in a date-based folder (`events/YYYY/MM/DD/HH.jsonl`) using Azure Append Blobs, so payloads are accumulated rather than overwritten when multiple writes occur within the same hour.
 
 ## Installation
 
@@ -30,7 +30,7 @@ Visit `http://localhost:8000/healthz` for a health check.
 
 ## Tracking URL example
 
-Use `http://vast.podhub.in/track` as the base URL when constructing tracking pixels. For example:
+Use `http://vast.podhub.in/track?` as the base URL (note the trailing `?` so additional query parameters can be appended). For example:
 
 ```
 http://vast.podhub.in/track?advertiser=shopify&client=574d66fb-1a31-43ec-bd16-a28cd84d396c&clname=undrthecoshukshopifyuk_gb_shopify_218545&dt=%%delivery_time%%&eid=%%episodeid%%&event_type=imp&ip=%%ip%%&ord=%%cachebuster%%&pid=%%podcastid%%&plt=megaphone&pub=voiceworkssportslimited&ua=%%ua%%&v=1

@@ -7,7 +7,7 @@ from functools import lru_cache
 from threading import Lock, Timer
 from typing import Dict, List, Optional
 
-from azure.core.exceptions import ResourceExistsError
+from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 from azure.storage.blob import BlobServiceClient, ContentSettings
 from dotenv import load_dotenv
 
@@ -113,17 +113,24 @@ def _write_pending(pending: Dict[str, List[bytes]]) -> None:
             continue
         blob_client = client.get_blob_client(blob_name)
         try:
-            blob_client.create_append_blob(
-                content_settings=ContentSettings(content_type="application/json")
-            )
-        except ResourceExistsError:
-            pass
-        except Exception:
-            logger.exception("Failed to create append blob %s", blob_name)
-            _return_to_buffer({blob_name: payloads})
-            continue
-        try:
             blob_client.append_block(data)
+        except ResourceNotFoundError:
+            try:
+                blob_client.create_append_blob(
+                    content_settings=ContentSettings(content_type="application/json")
+                )
+            except ResourceExistsError:
+                pass
+            except Exception:
+                logger.exception("Failed to create append blob %s", blob_name)
+                _return_to_buffer({blob_name: payloads})
+                continue
+            try:
+                blob_client.append_block(data)
+            except Exception:
+                logger.exception("Failed to append events to blob %s", blob_name)
+                _return_to_buffer({blob_name: payloads})
+                continue
         except Exception:
             logger.exception("Failed to append events to blob %s", blob_name)
             _return_to_buffer({blob_name: payloads})
