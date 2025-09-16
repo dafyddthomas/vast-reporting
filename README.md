@@ -14,9 +14,10 @@ pip install -r requirements.txt
 3. Create a `.env` file with Azure connection details:
 
 ```env
-AZURE_STORAGE_CONNECTION_STRING="<your connection string>"
-AZURE_CONTAINER="vast-logs"  # optional
-AZURE_BLOB_PREFIX="events"   # optional
+AZURE_STORAGE_ACCOUNT_NAME="<your storage account name>"
+AZURE_STORAGE_ACCOUNT_KEY="<your storage account key>"
+AZURE_CONTAINER="vast"      # optional, defaults to "vast"
+AZURE_BLOB_PREFIX="events"  # optional, defaults to "events"
 ```
 
 ## Running locally

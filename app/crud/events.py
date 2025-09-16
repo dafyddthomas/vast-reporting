@@ -1,22 +1,40 @@
+import atexit
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from functools import lru_cache
+from threading import Lock, Timer
+from typing import Dict, List, Optional
 
+from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import BlobServiceClient, ContentSettings
 from dotenv import load_dotenv
 
 from app.models.event import Event
 
 
+logger = logging.getLogger(__name__)
+
+_FLUSH_INTERVAL_SECONDS = 30
+
+_buffer_lock = Lock()
+_event_buffer: Dict[str, List[bytes]] = {}
+_flush_timer: Optional[Timer] = None
+
+
 @lru_cache(maxsize=1)
 def _container_client():
     load_dotenv()
-    conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
-    if not conn_str:
-        raise RuntimeError("AZURE_STORAGE_CONNECTION_STRING is required")
-    container = os.getenv("AZURE_CONTAINER", "vast-logs")
-    service = BlobServiceClient.from_connection_string(conn_str)
+    account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "")
+    if not account_name:
+        raise RuntimeError("AZURE_STORAGE_ACCOUNT_NAME is required")
+    account_key = os.getenv("AZURE_STORAGE_ACCOUNT_KEY", "")
+    if not account_key:
+        raise RuntimeError("AZURE_STORAGE_ACCOUNT_KEY is required")
+    container = os.getenv("AZURE_CONTAINER", "vast")
+    account_url = f"https://{account_name}.blob.core.windows.net"
+    service = BlobServiceClient(account_url=account_url, credential=account_key)
     client = service.get_container_client(container)
     try:
         client.create_container()
@@ -30,14 +48,93 @@ def _blob_path(now: datetime) -> str:
     return f"{prefix}/{now:%Y/%m/%d}/{now:%H}.jsonl"
 
 
+def _schedule_flush_locked() -> None:
+    global _flush_timer
+    if _flush_timer is not None:
+        return
+    timer = Timer(_FLUSH_INTERVAL_SECONDS, _flush_from_timer)
+    timer.daemon = True
+    _flush_timer = timer
+    timer.start()
+
+
+def _flush_from_timer() -> None:
+    pending = _drain_buffer(cancel_timer=False)
+    _write_pending(pending)
+
+
+def _drain_buffer(cancel_timer: bool) -> Dict[str, List[bytes]]:
+    global _event_buffer, _flush_timer
+    with _buffer_lock:
+        pending = _event_buffer
+        _event_buffer = {}
+        timer = _flush_timer
+        _flush_timer = None
+    if cancel_timer and timer is not None:
+        timer.cancel()
+    return pending
+
+
+def _return_to_buffer(pending: Dict[str, List[bytes]]) -> None:
+    if not pending:
+        return
+    with _buffer_lock:
+        for blob_name, payloads in pending.items():
+            if not payloads:
+                continue
+            _event_buffer.setdefault(blob_name, []).extend(payloads)
+        _schedule_flush_locked()
+
+
+def _write_pending(pending: Dict[str, List[bytes]]) -> None:
+    if not pending:
+        return
+    if not any(payloads for payloads in pending.values()):
+        return
+    try:
+        client = _container_client()
+    except Exception:  # pragma: no cover - unexpected configuration errors
+        logger.exception("Unable to create Azure container client")
+        _return_to_buffer(pending)
+        return
+    for blob_name, payloads in pending.items():
+        if not payloads:
+            continue
+        data = b"".join(payloads)
+        if not data:
+            continue
+        blob_client = client.get_blob_client(blob_name)
+        try:
+            blob_client.create_append_blob(
+                content_settings=ContentSettings(content_type="application/json")
+            )
+        except ResourceExistsError:
+            pass
+        except Exception:
+            logger.exception("Failed to create append blob %s", blob_name)
+            _return_to_buffer({blob_name: payloads})
+            continue
+        try:
+            blob_client.append_block(data)
+        except Exception:
+            logger.exception("Failed to append events to blob %s", blob_name)
+            _return_to_buffer({blob_name: payloads})
+
+
+def flush_events() -> None:
+    pending = _drain_buffer(cancel_timer=True)
+    _write_pending(pending)
+
+
 def append_event(event: Event) -> None:
-    client = _container_client()
     now = datetime.now(timezone.utc)
     blob_name = _blob_path(now)
-    blob_client = client.get_blob_client(blob_name)
-    data = (json.dumps(event.__dict__, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
-    try:
-        blob_client.create_append_blob(content_settings=ContentSettings(content_type="application/json"))
-    except Exception:
-        pass
-    blob_client.append_block(data)
+    data = (
+        json.dumps(event.__dict__, separators=(",", ":"), ensure_ascii=False) + "\n"
+    ).encode("utf-8")
+    with _buffer_lock:
+        _event_buffer.setdefault(blob_name, []).append(data)
+        _schedule_flush_locked()
+
+
+atexit.register(flush_events)
