@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -31,7 +32,7 @@ def _sample_event(**overrides: object) -> Event:
 
 def test_flush_events_batches_payload(monkeypatch):
     events.flush_events()
-    monkeypatch.setattr(events, "_blob_path", lambda _: "prefix/blob")
+    monkeypatch.setattr(events, "_blob_path", lambda _: "events/2025/09/16/12.jsonl")
 
     mock_blob_client = MagicMock()
     mock_container = MagicMock()
@@ -48,7 +49,7 @@ def test_flush_events_batches_payload(monkeypatch):
 
     events.flush_events()
 
-    mock_container.get_blob_client.assert_called_once_with("prefix/blob")
+    mock_container.get_blob_client.assert_called_once_with("events/2025/09/16/12.jsonl")
     expected_first = (
         json.dumps(event_one.__dict__, separators=(",", ":"), ensure_ascii=False)
         + "\n"
@@ -64,7 +65,7 @@ def test_flush_events_batches_payload(monkeypatch):
 
 def test_flush_events_requeues_on_failure(monkeypatch):
     events.flush_events()
-    monkeypatch.setattr(events, "_blob_path", lambda _: "prefix/blob")
+    monkeypatch.setattr(events, "_blob_path", lambda _: "events/2025/09/16/12.jsonl")
 
     failing_event = _sample_event()
 
@@ -83,7 +84,7 @@ def test_flush_events_requeues_on_failure(monkeypatch):
 
     events.flush_events()
 
-    mock_container.get_blob_client.assert_called_once_with("prefix/blob")
+    mock_container.get_blob_client.assert_called_once_with("events/2025/09/16/12.jsonl")
     expected_data = (
         json.dumps(failing_event.__dict__, separators=(",", ":"), ensure_ascii=False)
         + "\n"
@@ -91,3 +92,30 @@ def test_flush_events_requeues_on_failure(monkeypatch):
     mock_blob_client.append_block.assert_called_once_with(expected_data)
 
     events.flush_events()
+
+
+def test_download_events_blob_logs_full_path(monkeypatch, caplog):
+    blob_path = "events/2025/09/16/12.jsonl"
+    expected_url = (
+        "https://podcastlake.blob.core.windows.net/vast/events/2025/09/16/12.jsonl"
+    )
+
+    mock_blob_client = MagicMock()
+    mock_blob_client.url = expected_url
+
+    mock_downloader = MagicMock()
+    mock_downloader.readall.return_value = b"payload"
+    mock_blob_client.download_blob.return_value = mock_downloader
+
+    mock_container = MagicMock()
+    mock_container.get_blob_client.return_value = mock_blob_client
+
+    monkeypatch.setattr(events, "_container_client", lambda: mock_container)
+    monkeypatch.setattr(events, "_blob_path", lambda _: blob_path)
+
+    with caplog.at_level("DEBUG", logger="app.crud.events"):
+        result = events.download_events_blob(datetime(2025, 9, 16, 12, tzinfo=timezone.utc))
+
+    assert result == b"payload"
+    assert any("/vast/events/" in message for message in caplog.messages)
+    mock_blob_client.download_blob.assert_called_once_with()
