@@ -48,6 +48,14 @@ def _blob_path(now: datetime) -> str:
     return f"{prefix}/{now:%Y/%m/%d}/{now:%H}.jsonl"
 
 
+def _blob_url(blob_name: str) -> str:
+    account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "").strip()
+    container = os.getenv("AZURE_CONTAINER", "vast")
+    if account_name:
+        return f"https://{account_name}.blob.core.windows.net/{container}/{blob_name}"
+    return f"{container}/{blob_name}"
+
+
 def _schedule_flush_locked() -> None:
     global _flush_timer
     if _flush_timer is not None:
@@ -135,6 +143,32 @@ def append_event(event: Event) -> None:
     with _buffer_lock:
         _event_buffer.setdefault(blob_name, []).append(data)
         _schedule_flush_locked()
+
+
+def download_events_blob(blob_time: datetime) -> Optional[bytes]:
+    """Download the blob that stores VAST events for the provided time slot.
+
+    Returns the blob content as bytes when the download succeeds or ``None``
+    when the blob cannot be retrieved.
+    """
+
+    blob_name = _blob_path(blob_time)
+    try:
+        client = _container_client()
+    except Exception:
+        logger.exception("Unable to create Azure container client for download")
+        return None
+
+    blob_client = client.get_blob_client(blob_name)
+    blob_url = getattr(blob_client, "url", _blob_url(blob_name))
+    logger.debug("Downloading VAST events from %s", blob_url)
+
+    try:
+        downloader = blob_client.download_blob()
+        return downloader.readall()
+    except Exception:
+        logger.exception("Failed to download events blob %s", blob_url)
+        return None
 
 
 atexit.register(flush_events)
